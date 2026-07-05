@@ -1,27 +1,37 @@
 # soemdsp-retrofusion
 
-Five filters, none of them well-behaved. Feedback resonators and
-chaotic waveshapers that would rather self-oscillate than sit quietly
-and roll off frequencies -- the analog-filter grit that made old drum
-machines and synths sound like they were fighting back.
+Five feedback/chaotic resonator filters, native WebAssembly, original
+designs (no external reference implementation).
 
-## What's here
+## Build target
 
-- **Yellowjacket Filter** — a feedback-modulated ellipse-oscillator
-  filter through a one-pole stage. Grindy, easily produces
-  square-wave-like output.
-- **SuperLove Filter** — a trisaw-oscillator feedback resonator through
-  a multi-pole ladder tap. Warm, bass-heavy, stably self-oscillating.
-- **Chaotic Phase Locking Filter** — a feedback ellipse-waveshaper
-  resonator producing phase-locked chaotic textures.
-- **Resonator Filter** — a dual-phasor FM feedback resonator, 3 chaotic
-  waveform-variation modes.
-- **Human Filter** — a dual-phasor feedback network shaped by a
-  bell/peak filter in the feedback path.
+`--target=wasm32 -O3 -nostdlib -fno-exceptions -fno-rtti`. Compiled
+with clang++.
 
-Each one compiled to a dependency-free WebAssembly module under
-`native_modules/`.
+## Export convention
 
-All five are original designs, not based on any published third-party
-filter (the RS-MET-lineage filters that used to be listed here --
-RSMET, Ladder, and TB-303 -- now live in `soemdsp-rsmet`).
+All 5 modules share the same shape:
+
+```
+int    {prefix}_create()
+void   {prefix}_destroy(int handle)
+double {prefix}_sample(int handle, double input, ...params, double sampleRate)
+int    {prefix}_version()
+```
+
+`frequency`, `resonance`, `chaosAmount` are 0-1 normalized on every
+module.
+
+## Modules
+
+| Module | Export prefix | `_sample` parameters after `input` | Modes | Description |
+|---|---|---|---|---|
+| Yellowjacket Filter | `soemdsp_yellowjacket_filter` | `frequency, resonance, chaosAmount, sampleRate` | — | Feedback-modulated ellipse-oscillator filter through a one-pole stage; `chaosAmount` drives filter cutoff scaling. |
+| SuperLove Filter | `soemdsp_superlove_filter` | `frequency, resonance, chaosAmount, mode, sampleRate` | 0=LP18, 1=LP24, 2=HP6, 3=BP6 | Trisaw-oscillator feedback resonator through a multi-pole ladder tap. |
+| Chaotic Phase Locking Filter | `soemdsp_chaotic_phase_locking_filter` | `frequency, resonance, chaosAmount, sampleRate` | — | Feedback ellipse-waveshaper resonator (no oscillator phasor) through a 12 dB lowpass and DC-blocking highpass. |
+| Resonator Filter | `soemdsp_resonator_filter` | `frequency, resonance, chaosAmount, mode, sampleRate` | 0=Sinusoid, 1=Triangle, 2=Sawtooth | Dual-phasor FM feedback resonator through a one-pole lowpass and DC-blocking highpass. |
+| Human Filter | `soemdsp_human_filter` | `frequency, resonance, chaosAmount, mode, sampleRate` | 0=BP6, 1=LP6, 2=LP12 | Dual-phasor feedback network shaped by a bell/peak filter in the feedback path, DC-blocking highpass on output. |
+
+Instance pool: `kMaxInstances` handles per module (see each `.cpp`).
+
+Source: `native_modules/{yellowjacket_filter,superlove_filter,chaotic_phase_locking_filter,resonator_filter,human_filter}/`.
