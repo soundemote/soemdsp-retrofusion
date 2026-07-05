@@ -1,18 +1,12 @@
 # soemdsp-retrofusion
 
-Eight filters, none of them well-behaved. Feedback resonators, chaotic
-waveshapers, and ladder circuits that would rather self-oscillate than
-sit quietly and roll off frequencies -- the analog-filter grit that made
-old drum machines and synths sound like they were fighting back.
+Five filters, none of them well-behaved. Feedback resonators and
+chaotic waveshapers that would rather self-oscillate than sit quietly
+and roll off frequencies -- the analog-filter grit that made old drum
+machines and synths sound like they were fighting back.
 
 ## What's here
 
-- **RSMET Filter** — a ladder filter preceded by a tanh soft clipper and
-  noise injection stage, exponential frequency/resonance curves, 10 modes.
-- **Ladder Filter** — the plain RS-MET-lineage ladder design underneath
-  RSMET Filter, gain-compensated, resonant stages.
-- **TB-303 Filter** — feedback highpass, resonance skewing, 15 output
-  modes (LP/HP/BP at 6/12/18/24 dB/octave).
 - **Yellowjacket Filter** — a feedback-modulated ellipse-oscillator
   filter through a one-pole stage. Grindy, easily produces
   square-wave-like output.
@@ -28,9 +22,6 @@ old drum machines and synths sound like they were fighting back.
 Each one compiled to a dependency-free WebAssembly module under
 `native_modules/`.
 
-## Attribution
-
-RSMET Filter, Ladder Filter, and TB-303 Filter are built in the lineage
-of Robin Schmidt's (RS-MET) published filter designs, including
-TeeBeeFilter / Open303. Credited here explicitly -- these three are not
-original designs.
+All five are original designs, not based on any published third-party
+filter (the RS-MET-lineage filters that used to be listed here --
+RSMET, Ladder, and TB-303 -- now live in `soemdsp-rsmet`).
