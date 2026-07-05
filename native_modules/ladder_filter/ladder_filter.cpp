@@ -1,0 +1,228 @@
+// soemdsp-native-module: ladder_filter
+// soemdsp-native-label: Ladder Filter
+// soemdsp-native-target: ladderFilter
+// soemdsp-native-kind: filter
+
+namespace {
+
+static const int kMaxInstances = 64;
+static const double kPi     = 3.141592653589793238;
+static const double kTwoPi  = 6.283185307179586476;
+static const double kHalfPi = 1.5707963267948966192;
+
+static const char kMetadataJson[] =
+  "{"
+    "\"module\":\"ladder_filter\","
+    "\"label\":\"Ladder Filter\","
+    "\"targetType\":\"ladderFilter\","
+    "\"kind\":\"filter\","
+    "\"inputs\":[\"In\"],"
+    "\"outputs\":[\"Out\"],"
+    "\"parameters\":["
+      "{"
+        "\"key\":\"mode\","
+        "\"label\":\"Mode\","
+        "\"defaultValue\":1,"
+        "\"min\":0,"
+        "\"mid\":1,"
+        "\"max\":3,"
+        "\"step\":1,"
+        "\"choices\":[\"Flat\",\"Lowpass\",\"Highpass\",\"Bandpass\"],"
+        "\"tooltip\":\"Selects the ladder output tap and filter response.\""
+      "},"
+      "{"
+        "\"key\":\"frequency\","
+        "\"label\":\"Frequency\","
+        "\"kind\":\"frequency\","
+        "\"defaultValue\":1000,"
+        "\"min\":0,"
+        "\"mid\":1000,"
+        "\"max\":20000,"
+        "\"step\":\"any\","
+        "\"unit\":\"Hz\","
+        "\"tooltip\":\"Sets the ladder cutoff frequency.\""
+      "},"
+      "{"
+        "\"key\":\"resonance\","
+        "\"label\":\"Resonance\","
+        "\"defaultValue\":0.2,"
+        "\"min\":0,"
+        "\"mid\":0.2,"
+        "\"max\":0.999,"
+        "\"step\":\"any\","
+        "\"tooltip\":\"Sets the feedback amount near the cutoff frequency.\""
+      "},"
+      "{"
+        "\"key\":\"stages\","
+        "\"label\":\"Stages\","
+        "\"defaultValue\":4,"
+        "\"min\":1,"
+        "\"mid\":4,"
+        "\"max\":4,"
+        "\"step\":1,"
+        "\"tooltip\":\"Chooses how many ladder stages are used.\""
+      "}"
+    "]"
+  "}";
+
+struct LadderState {
+  double y[5];
+  bool active;
+  double lastOut;
+};
+
+static LadderState gPool[kMaxInstances];
+
+static inline double safe(double x) {
+  return (x * 0.0 == 0.0) ? x : 0.0;
+}
+
+static double poly_sin_0_halfpi(double x) {
+  const double x2 = x * x;
+  return x * (1.0 + x2 * (-1.6666666666666667e-1 + x2 * (8.3333333333333329e-3 + x2 * (-1.9841269841269841e-4 + x2 * (2.7557319223985888e-6 + x2 * (-2.5052108385441720e-8 + x2 * 1.6059043836821614e-10))))));
+}
+
+// x must be in [0, pi]
+static double dsp_sin(double x) {
+  if (x > kHalfPi) x = kPi - x;
+  return poly_sin_0_halfpi(x);
+}
+
+// x must be in [0, pi]
+static double dsp_cos(double x) {
+  double y = kHalfPi - x;
+  if (y < 0.0) {
+    return -poly_sin_0_halfpi(-y);
+  }
+  return poly_sin_0_halfpi(y);
+}
+
+// x must be in (-pi/2, 0] — our use case: 0.25*(wc - pi) for wc in [1e-9, 0.98*pi]
+static double dsp_tan_neg_halfquarter(double x) {
+  const double ax = -x;
+  const double s = poly_sin_0_halfpi(ax);
+  const double c = poly_sin_0_halfpi(kHalfPi - ax);
+  return (c == 0.0) ? -1e15 : -(s / c);
+}
+
+static void compute_mix(int mode, int stages, double c[5], double* s_out) {
+  for (int i = 0; i < 5; i++) c[i] = 0.0;
+  if (mode == 0) {
+    c[0] = 1.0;
+    *s_out = 0.125;
+  } else if (mode == 1) {
+    c[stages] = 1.0;
+    *s_out = stages * 0.25;
+  } else if (mode == 2) {
+    static const double bp[4][5] = {
+      {1.0, -1.0,  0.0,  0.0, 0.0},
+      {1.0, -2.0,  1.0,  0.0, 0.0},
+      {1.0, -3.0,  3.0, -1.0, 0.0},
+      {1.0, -4.0,  6.0, -4.0, 1.0},
+    };
+    for (int i = 0; i <= stages; i++) c[i] = bp[stages - 1][i];
+    *s_out = stages * 0.25;
+  } else {
+    static const double m3[4][5] = {
+      {0.0, 2.0, -2.0,  0.0, 0.0},
+      {0.0, 2.0, -2.0,  0.0, 0.0},
+      {0.0, 0.0,  3.0, -3.0, 0.0},
+      {0.0, 0.0,  4.0, -8.0, 4.0},
+    };
+    for (int i = 0; i < 5; i++) c[i] = m3[stages - 1][i];
+    *s_out = 0.125;
+  }
+}
+
+}  // namespace
+
+extern "C" int soemdsp_ladder_filter_create() {
+  for (int i = 0; i < kMaxInstances; i++) {
+    if (!gPool[i].active) {
+      LadderState& s = gPool[i];
+      for (int j = 0; j < 5; j++) s.y[j] = 0.0;
+      s.lastOut = 0.0;
+      s.active = true;
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+extern "C" void soemdsp_ladder_filter_destroy(int handle) {
+  if (handle < 1 || handle > kMaxInstances) return;
+  gPool[handle - 1].active = false;
+}
+
+extern "C" double soemdsp_ladder_filter_sample(
+  int handle,
+  double input,
+  double frequency,
+  double resonance,
+  int mode,
+  int stages,
+  double sampleRate
+) {
+  if (handle < 1 || handle > kMaxInstances) return 0.0;
+  LadderState& s = gPool[handle - 1];
+
+  const double safeRate = sampleRate < 1.0 ? 44100.0 : sampleRate;
+  const double maxFreq  = safeRate * 0.49 < 20000.0 ? safeRate * 0.49 : 20000.0;
+  const double safeFreq = frequency < 0.000001 ? 0.000001 : (frequency > maxFreq ? maxFreq : frequency);
+  const double feedback  = resonance < 0.0 ? 0.0 : (resonance > 0.999 ? 0.999 : resonance);
+  const int safeMode    = mode < 0 ? 0 : (mode > 3 ? 3 : mode);
+  const int safeStages  = stages < 1 ? 1 : (stages > 4 ? 4 : stages);
+
+  const double rawWc    = 2.0 * kPi * safeFreq / safeRate;
+  const double wc       = rawWc < 1e-9 ? 1e-9 : (rawWc > kPi * 0.98 ? kPi * 0.98 : rawWc);
+
+  const double sine    = dsp_sin(wc);
+  const double cosine  = dsp_cos(wc);
+  const double tangent = dsp_tan_neg_halfquarter(0.25 * (wc - kPi));
+
+  double a = (sine - cosine * tangent);
+  a = (a < 1e-12 && a > -1e-12) ? (a >= 0 ? 1e-12 : -1e-12) : a;
+  a = tangent / a;
+  if (a * 0.0 != 0.0) a = -1.0;
+
+  double c[5];
+  double mixS;
+  compute_mix(safeMode, safeStages, c, &mixS);
+
+  const double b     = 1.0 + a;
+  const double denom = 1.0 + a * a + 2.0 * a * cosine;
+  const double safeDenom = denom < 1e-12 ? 1e-12 : denom;
+  const double g2    = (b * b) / safeDenom;
+  const double g2sq  = g2 * g2 < 1e-12 ? 1e-12 : g2 * g2;
+  const double k     = feedback / g2sq;
+  const double g     = 1.0 + mixS * k;
+
+  const double safeIn = safe(input);
+  double y0 = g * safeIn - k * s.y[4];
+  y0 = safe(y0 / (1.0 + y0 * y0));
+  const double ny1 = safe(y0      + a * (y0      - s.y[1]));
+  const double ny2 = safe(ny1     + a * (ny1     - s.y[2]));
+  const double ny3 = safe(ny2     + a * (ny2     - s.y[3]));
+  const double ny4 = safe(ny3     + a * (ny3     - s.y[4]));
+  s.y[0] = y0;
+  s.y[1] = ny1;
+  s.y[2] = ny2;
+  s.y[3] = ny3;
+  s.y[4] = ny4;
+
+  const double out = c[0]*s.y[0] + c[1]*s.y[1] + c[2]*s.y[2] + c[3]*s.y[3] + c[4]*s.y[4];
+  s.lastOut = safe(out);
+  return s.lastOut;
+}
+
+extern "C" int soemdsp_ladder_filter_version() {
+  return 1;
+}
+
+extern "C" const char* soemdsp_ladder_filter_metadata_json() {
+  return kMetadataJson;
+}
+
+extern "C" int soemdsp_ladder_filter_metadata_json_size() {
+  return sizeof(kMetadataJson) - 1;
+}
